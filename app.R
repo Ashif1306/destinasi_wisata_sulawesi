@@ -16,6 +16,7 @@ library(httr)
 library(jsonlite)
 library(shinyjs)
 library(shinyanimate)
+library(shinycssloaders)
 
 # ============================================================
 # GLOBAL: Supabase Config & Data Loading
@@ -360,9 +361,12 @@ ui <- dashboardPage(
         /* Hapus jarak besar di atas menu sidebar */
         .main-sidebar, .main-sidebar .sidebar { padding-top: 0 !important; margin-top: 0 !important; }
         .sidebar-menu { margin-top: 0 !important; padding-top: 0 !important; }
-        .skin-black .sidebar-menu>li>a { color:#A0ABC0; font-weight:500; transition:0.3s ease; }
+        .skin-black .sidebar-menu>li>a { color:#A0ABC0; font-weight:500; transition:all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1); }
         .skin-black .sidebar-menu>li.active>a,.skin-black .sidebar-menu>li:hover>a { background:rgba(32,201,151,0.15) !important; color:#20C997 !important; border-left-color:#20C997 !important; }
-        .skin-black .sidebar-menu>li>a>.fa { color:#20C997; }
+        .skin-black .sidebar-menu>li:hover>a { padding-left: 25px !important; }
+        .skin-black .sidebar-menu>li>a>.fa { color:#20C997; transition:all 0.3s ease; }
+        .skin-black .sidebar-menu>li.active>a>.fa { animation: icon-pulse-subtle 2s infinite cubic-bezier(0.4, 0, 0.2, 1); }
+        @keyframes icon-pulse-subtle { 0% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.2); opacity: 0.8; } 100% { transform: scale(1); opacity: 1; } }
         .content-wrapper { background:#F4F7F6; }
         .box { border-top:3px solid #20C997; border-radius:8px; box-shadow:0 4px 15px rgba(0,0,0,0.05); }
         .value-box, .small-box { border-radius:8px; }
@@ -551,7 +555,7 @@ ui <- dashboardPage(
           box(
             title = "📉 Confusion Matrix", width = 6,
             status = "primary", solidHeader = TRUE, height = 420,
-            plotlyOutput("plot_cm", height = 360)
+            withSpinner(plotlyOutput("plot_cm", height = 360), type = 1, color = "#64748b", size = 0.7)
           ),
           box(
             title = "🌟 Feature Importance", width = 6,
@@ -1268,18 +1272,29 @@ server <- function(input, output, session) {
     )
   })
 
-  # ---- ANIMASI VALUE BOXES RF ----
+  # ---- ANIMASI VALUE BOXES RF (Staggered: 0ms / 500ms / 1000ms) ----
   observeEvent(input$sidebar, {
     if (input$sidebar == "randomforest") {
-      shinyjs::removeClass(id = "anim_akurasi_box", class = "hidden-anim-box")
-      startAnim(session, "anim_akurasi_box", "fadeInDown")
-      
-      shinyjs::delay(300, {
+
+      # Reset semua box ke state tersembunyi dulu, agar animasi terulang setiap masuk tab
+      shinyjs::addClass(id = "anim_akurasi_box", class = "hidden-anim-box")
+      shinyjs::addClass(id = "anim_kappa_box",   class = "hidden-anim-box")
+      shinyjs::addClass(id = "anim_trees_box",   class = "hidden-anim-box")
+
+      # Box 1 – Akurasi: muncul langsung (0ms)
+      shinyjs::delay(50, {
+        shinyjs::removeClass(id = "anim_akurasi_box", class = "hidden-anim-box")
+        startAnim(session, "anim_akurasi_box", "fadeInDown")
+      })
+
+      # Box 2 – Kappa: muncul setelah 500ms
+      shinyjs::delay(500, {
         shinyjs::removeClass(id = "anim_kappa_box", class = "hidden-anim-box")
         startAnim(session, "anim_kappa_box", "fadeInDown")
       })
-      
-      shinyjs::delay(600, {
+
+      # Box 3 – Trees: muncul setelah 1000ms
+      shinyjs::delay(1000, {
         shinyjs::removeClass(id = "anim_trees_box", class = "hidden-anim-box")
         startAnim(session, "anim_trees_box", "fadeInDown")
       })
@@ -1291,43 +1306,191 @@ server <- function(input, output, session) {
     startAnim(session, "anim_akurasi_box", "pulse")
   }, ignoreInit = TRUE)
 
-  # ---- CONFUSION MATRIX HEATMAP ----
+  # ---- CONFUSION MATRIX HEATMAP (animasi: diagonal dulu → menyamping) ----
   output$plot_cm <- renderPlotly({
+    req(input$sidebar == "randomforest")
+    input$fil_provinsi; input$fil_kategori
+
     cm_table <- as.data.frame(rf_cm$table)
-    plot_ly(cm_table,
-      x = ~Reference, y = ~Prediction, z = ~Freq,
+
+    # Susun level label agar urutan sumbu konsisten
+    labels <- levels(rf_result$train$label_rekomendasi)
+
+    plot_ly(
+      x = labels, y = labels,
+      # Mulai dengan matrix nol (semua sel tersembunyi)
+      z    = matrix(0, nrow = length(labels), ncol = length(labels)),
       type = "heatmap",
-      colorscale = list(c(0, "#f0f4ff"), c(1, "#6C63FF")),
-      text = ~Freq, texttemplate = "%{text}",
-      hoverinfo = "x+y+z"
+      colorscale = list(
+        c(0,   "#f0f4ff"),
+        c(0.5, "#818cf8"),
+        c(1,   "#6C63FF")
+      ),
+      zmin = 0,
+      zmax = max(cm_table$Freq),
+      text = matrix("", nrow = length(labels), ncol = length(labels)),
+      texttemplate = "%{text}",
+      hoverinfo = "x+y+z",
+      showscale = FALSE
     ) %>%
       layout(
         paper_bgcolor = "transparent",
-        xaxis = list(title = "Aktual"),
-        yaxis = list(title = "Prediksi")
-      )
+        plot_bgcolor  = "transparent",
+        xaxis = list(title = "Aktual",   tickfont = list(size = 12)),
+        yaxis = list(title = "Prediksi", tickfont = list(size = 12))
+      ) %>%
+      plotly::config(displayModeBar = FALSE) %>%
+      # Inject animasi via JavaScript: diagonal muncul dulu, lalu sweep ke off-diagonal
+      htmlwidgets::onRender(sprintf("
+        function(el, x) {
+          var gd = el;
+
+          // Data confusion matrix yang sesungguhnya (dari R)
+          var labels  = %s;
+          var n       = labels.length;
+          var rawFreq = %s;  // flat array row-major
+
+          // Susun menjadi matrix n x n
+          var fullZ = [];
+          var fullT = [];
+          for (var r = 0; r < n; r++) {
+            var rowZ = [], rowT = [];
+            for (var c = 0; c < n; c++) {
+              rowZ.push(rawFreq[r * n + c]);
+              rowT.push(String(rawFreq[r * n + c]));
+            }
+            fullZ.push(rowZ);
+            fullT.push(rowT);
+          }
+
+          // Fungsi utilitas: buat matrix nol
+          function zeroMatrix(n) {
+            return Array.from({length: n}, function() {
+              return new Array(n).fill(0);
+            });
+          }
+          function emptyMatrix(n) {
+            return Array.from({length: n}, function() {
+              return new Array(n).fill('');
+            });
+          }
+
+          // ── FASE 1: Muncul diagonal (prediksi benar) satu per satu ──
+          var delay = 200;
+          for (var d = 0; d < n; d++) {
+            (function(diag, t) {
+              setTimeout(function() {
+                var Z = zeroMatrix(n), T = emptyMatrix(n);
+                // Isi sel diagonal yang sudah 'muncul' sampai index diag
+                for (var k = 0; k <= diag; k++) {
+                  Z[k][k] = fullZ[k][k];
+                  T[k][k] = fullT[k][k];
+                }
+                Plotly.restyle(gd, { z: [Z], text: [T] });
+              }, t);
+            })(d, delay * (d + 1));
+          }
+
+          // ── FASE 2: Sweep menyamping — isi sel off-diagonal baris per baris ──
+          var phase2Start = delay * (n + 1) + 100;
+          for (var step = 0; step < n; step++) {
+            (function(row, t) {
+              setTimeout(function() {
+                var Z = zeroMatrix(n), T = emptyMatrix(n);
+                // Pertahankan semua diagonal
+                for (var k = 0; k < n; k++) {
+                  Z[k][k] = fullZ[k][k];
+                  T[k][k] = fullT[k][k];
+                }
+                // Isi off-diagonal di baris 0..row
+                for (var r = 0; r <= row; r++) {
+                  for (var c = 0; c < n; c++) {
+                    Z[r][c] = fullZ[r][c];
+                    T[r][c] = fullT[r][c];
+                  }
+                }
+                Plotly.restyle(gd, { z: [Z], text: [T] });
+              }, t);
+            })(step, phase2Start + 280 * (step + 1));
+          }
+        }
+      ",
+        # Inject data dari R → JSON untuk JS
+        jsonlite::toJSON(labels),
+        jsonlite::toJSON(
+          as.vector(t(
+            matrix(cm_table$Freq,
+                   nrow = length(labels),
+                   ncol = length(labels),
+                   dimnames = list(labels, labels))[labels, labels]
+          ))
+        )
+      ))
   })
+
 
   # ---- FEATURE IMPORTANCE ----
   output$plot_importance <- renderPlotly({
+    req(input$sidebar == "randomforest")
+    input$fil_provinsi; input$fil_kategori
+
     imp <- as.data.frame(importance(rf_model)) %>%
       rownames_to_column("Feature") %>%
       arrange(desc(MeanDecreaseGini))
+
     plot_ly(imp,
-      x = ~MeanDecreaseGini, y = ~ reorder(Feature, MeanDecreaseGini),
+      x = ~MeanDecreaseGini, y = ~reorder(Feature, MeanDecreaseGini),
       type = "bar", orientation = "h",
-      marker = list(color = "#43C6AC")
+      marker = list(
+        color = colorRampPalette(c("#43C6AC", "#1a9e89"))(nrow(imp)),
+        line  = list(color = "rgba(255,255,255,0.2)", width = 0.5)
+      )
     ) %>%
       layout(
         paper_bgcolor = "transparent",
-        plot_bgcolor = "transparent",
-        xaxis = list(title = "Mean Decrease Gini"),
-        yaxis = list(title = "")
-      )
+        plot_bgcolor  = "transparent",
+        xaxis = list(
+          title     = "Mean Decrease Gini",
+          rangemode = "nonnegative",   # sumbu tidak melebar ke < 0
+          range     = c(0, max(imp$MeanDecreaseGini) * 1.12)
+        ),
+        yaxis = list(title = ""),
+        # Transisi pertumbuhan batang saat plot pertama dimuat
+        transition = list(
+          duration = 1000,
+          easing   = "exp-out"
+        ),
+        frame = list(duration = 1000, redraw = FALSE)
+      ) %>%
+      htmlwidgets::onRender("
+        function(el, x) {
+          // Ambil nilai asli sumbu X lalu set ke 0 agar bar tumbuh dari kiri
+          var gd = el;
+          var original_x = gd.data[0].x.slice();
+          var zero_x = original_x.map(function() { return 0; });
+
+          // Set semua bar ke 0 terlebih dahulu
+          Plotly.restyle(gd, {x: [zero_x]}, [0]);
+
+          // Kemudian animasikan bar ke nilai aslinya
+          setTimeout(function() {
+            Plotly.animate(gd, {
+              data: [{ x: original_x }]
+            }, {
+              transition: { duration: 1000, easing: 'exp-out' },
+              frame:      { duration: 1000, redraw: false }
+            });
+          }, 200);
+        }
+      ") %>%
+      plotly::config(displayModeBar = FALSE)
   })
 
   # ---- OOB ERROR RATE PLOT ----
   output$plot_oob <- renderPlotly({
+    req(input$sidebar == "randomforest")
+    input$fil_provinsi; input$fil_kategori
+    
     plot_ly(oob_df,
       x = ~trees, y = ~oob_error,
       type = "scatter", mode = "lines",
@@ -1357,6 +1520,25 @@ server <- function(input, output, session) {
         )),
         margin = list(t = 10, b = 50, l = 60, r = 20)
       ) %>%
+      htmlwidgets::onRender("
+        function(el, x) {
+          var gd = el;
+          var original_y = gd.data[0].y.slice();
+          // Set awal Y ke 0 agar garis tumbuh dari bawah
+          var zero_y = original_y.map(function() { return 0; });
+
+          Plotly.restyle(gd, {y: [zero_y]}, [0]);
+
+          setTimeout(function() {
+            Plotly.animate(gd, {
+              data: [{ y: original_y }]
+            }, {
+              transition: { duration: 1000, easing: 'cubic-in-out' },
+              frame:      { duration: 1000, redraw: false }
+            });
+          }, 200);
+        }
+      ") %>%
       {
         plotly::config(., displayModeBar = FALSE)
       }
@@ -1364,6 +1546,9 @@ server <- function(input, output, session) {
 
   # ---- PER-CLASS PRECISION & RECALL PLOT ----
   output$plot_perclass <- renderPlotly({
+    req(input$sidebar == "randomforest")
+    input$fil_provinsi; input$fil_kategori
+
     metric_colors <- c(Precision = "#6C63FF", Recall = "#43C6AC")
     plot_ly(per_class_df,
       x = ~Class, y = ~Value, color = ~Metric,
@@ -1379,7 +1564,8 @@ server <- function(input, output, session) {
         yaxis = list(
           title = "Nilai (%)",
           color = "#333",
-          range = c(0, 110)
+          range = c(0, 110),
+          rangemode = "nonnegative"
         ),
         legend = list(
           orientation = "h",
@@ -1387,9 +1573,39 @@ server <- function(input, output, session) {
         ),
         margin = list(t = 40, b = 50, l = 60, r = 20)
       ) %>%
-      {
-        plotly::config(., displayModeBar = FALSE)
-      }
+      htmlwidgets::onRender("
+        function(el, x) {
+          var gd = el;
+          
+          // Grafik ini memiliki multiple traces karena di-group (Precision & Recall)
+          var n_traces = gd.data.length;
+          var original_y = [];
+          var zero_y = [];
+          var traces_idx = [];
+          
+          for (var i = 0; i < n_traces; i++) {
+            var y_arr = gd.data[i].y.slice();
+            original_y.push({ y: y_arr });
+            zero_y.push(y_arr.map(function() { return 0; }));
+            traces_idx.push(i);
+          }
+          
+          // Set semua nilai Y ke 0 terlebih dahulu agar bar tersembunyi di bawah
+          Plotly.restyle(gd, {y: zero_y}, traces_idx);
+          
+          // Animasikan ke nilai aslinya bersamaan
+          setTimeout(function() {
+            Plotly.animate(gd, {
+              data: original_y,
+              traces: traces_idx
+            }, {
+              transition: { duration: 1000, easing: 'elastic-in-out' },
+              frame:      { duration: 1000, redraw: false }
+            });
+          }, 200);
+        }
+      ") %>%
+      plotly::config(displayModeBar = FALSE)
   })
 
   # ---- SIMULATOR PREDIKSI ----
