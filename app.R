@@ -14,6 +14,8 @@ library(DT)
 library(cluster)
 library(httr)
 library(jsonlite)
+library(shinyjs)
+library(shinyanimate)
 
 # ============================================================
 # GLOBAL: Supabase Config & Data Loading
@@ -339,6 +341,8 @@ ui <- dashboardPage(
     )
   ),
   dashboardBody(
+    useShinyjs(),
+    withAnim(),
     tags$head(
       tags$style(HTML("
         .main-header { position:fixed !important; width:100% !important; top:0 !important; z-index:1030 !important; }
@@ -418,6 +422,11 @@ ui <- dashboardPage(
         .dual-chart-box.chart-pie-box .box:hover { box-shadow:0 18px 42px rgba(39,174,96,0.32) !important; }
         .dual-chart-box.chart-pie-box .box::after { content:''; position:absolute; top:0; left:0; right:0; height:3px; background:linear-gradient(90deg,#27ae60,#f39c12,#e74c3c,#9b59b6,#27ae60); background-size:200% 100%; opacity:0; transition:opacity 0.3s ease; }
         .dual-chart-box.chart-pie-box .box:hover::after { opacity:1; animation:border-run 2s linear infinite; }
+        #anim_akurasi_box .small-box { background-color: #2ecc71 !important; color: #fff !important; }
+        #anim_kappa_box .small-box { background-color: #3498db !important; color: #fff !important; box-shadow: 0 4px 18px rgba(52,152,219,0.2) !important; transition: transform 0.28s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.28s ease !important; }
+        #anim_kappa_box .small-box:hover { transform: translateY(-5px) scale(1.03) !important; box-shadow: 0 16px 36px rgba(52,152,219,0.45) !important; filter: brightness(1.08) !important; }
+        #anim_kappa_box .small-box:hover .icon { animation: wiggle 0.6s ease; }
+        .hidden-anim-box { visibility: hidden; }
       ")),
       # ---- Script: JS handler untuk update dropdown Kabupaten ----
       tags$script(HTML("
@@ -446,7 +455,8 @@ ui <- dashboardPage(
             choices = c("Semua" = "Semua", sort(unique(as.character(df_final$provinsi)))),
             selected = "Semua"
           )),
-          column(3,
+          column(
+            3,
             tags$label("📍 Kabupaten:"),
             tags$select(
               id = "ov_kabupaten",
@@ -533,9 +543,9 @@ ui <- dashboardPage(
       tabItem(
         tabName = "randomforest",
         fluidRow(
-          infoBoxOutput("ib_accuracy", width = 4),
-          infoBoxOutput("ib_kappa", width = 4),
-          infoBoxOutput("ib_ntree", width = 4)
+          column(width = 4, tags$div(id = "anim_akurasi_box", class = "hidden-anim-box", valueBoxOutput("ib_accuracy", width = NULL))),
+          column(width = 4, tags$div(id = "anim_kappa_box", class = "hidden-anim-box", valueBoxOutput("ib_kappa", width = NULL))),
+          column(width = 4, tags$div(id = "anim_trees_box", class = "hidden-anim-box", valueBoxOutput("ib_ntree", width = NULL)))
         ),
         fluidRow(
           box(
@@ -563,7 +573,7 @@ ui <- dashboardPage(
         ),
         fluidRow(
           box(
-            title = "🔮 Simulator Prediksi Label Rekomendasi", width = 12,
+            title = "🔮 Simulator Prediksi Rekomendasi Wisata", width = 12,
             status = "success", solidHeader = TRUE,
             tags$p(
               style = "font-size:12px;color:#888;margin-bottom:8px;",
@@ -640,24 +650,27 @@ server <- function(input, output, session) {
   # Cascading dropdown: kirim pilihan Kabupaten ke browser via JavaScript
   # Menggunakan sendCustomMessage untuk bypass semua sistem reaktif Shiny
   # yang terbukti tidak andal untuk kasus ini
-  observeEvent(input$ov_provinsi, {
-    provinsi_val <- input$ov_provinsi
-    
-    if (is.null(provinsi_val) || provinsi_val == "Semua") {
-      kab_choices <- sort(unique(as.character(df_final$kabupaten)))
-    } else {
-      kab_choices <- sort(unique(as.character(
-        df_final$kabupaten[df_final$provinsi == provinsi_val]
-      )))
-    }
-    
-    kab_choices <- kab_choices[!is.na(kab_choices) & nzchar(kab_choices)]
-    
-    # Kirim langsung ke JavaScript di browser — 100% andal
-    session$sendCustomMessage("updateKabupaten", list(
-      choices = c("Semua", kab_choices)
-    ))
-  }, ignoreInit = TRUE)
+  observeEvent(input$ov_provinsi,
+    {
+      provinsi_val <- input$ov_provinsi
+
+      if (is.null(provinsi_val) || provinsi_val == "Semua") {
+        kab_choices <- sort(unique(as.character(df_final$kabupaten)))
+      } else {
+        kab_choices <- sort(unique(as.character(
+          df_final$kabupaten[df_final$provinsi == provinsi_val]
+        )))
+      }
+
+      kab_choices <- kab_choices[!is.na(kab_choices) & nzchar(kab_choices)]
+
+      # Kirim langsung ke JavaScript di browser — 100% andal
+      session$sendCustomMessage("updateKabupaten", list(
+        choices = c("Semua", kab_choices)
+      ))
+    },
+    ignoreInit = TRUE
+  )
 
   # Reactive: apakah ada wisata yg dicari?
   selected_wisata <- reactive({
@@ -1239,21 +1252,44 @@ server <- function(input, output, session) {
   })
 
   # ---- INFO BOXES RF ----
-  output$ib_accuracy <- renderInfoBox({
-    infoBox("Akurasi Model", paste0(round(rf_cm$overall["Accuracy"] * 100, 1), "%"),
-      icon = icon("bullseye"), color = "green", fill = TRUE
+  output$ib_accuracy <- renderValueBox({
+    valueBox(paste0(round(rf_cm$overall["Accuracy"] * 100, 1), "%"), "Akurasi Model",
+      icon = icon("bullseye"), color = "green"
     )
   })
-  output$ib_kappa <- renderInfoBox({
-    infoBox("Kappa", round(rf_cm$overall["Kappa"], 3),
-      icon = icon("balance-scale"), color = "blue", fill = TRUE
+  output$ib_kappa <- renderValueBox({
+    valueBox(round(rf_cm$overall["Kappa"], 3), "Kappa",
+      icon = icon("balance-scale"), color = "blue"
     )
   })
-  output$ib_ntree <- renderInfoBox({
-    infoBox("Jumlah Trees", rf_model$ntree,
-      icon = icon("tree"), color = "olive", fill = TRUE
+  output$ib_ntree <- renderValueBox({
+    valueBox(rf_model$ntree, "Jumlah Trees",
+      icon = icon("tree"), color = "purple"
     )
   })
+
+  # ---- ANIMASI VALUE BOXES RF ----
+  observeEvent(input$sidebar, {
+    if (input$sidebar == "randomforest") {
+      shinyjs::removeClass(id = "anim_akurasi_box", class = "hidden-anim-box")
+      startAnim(session, "anim_akurasi_box", "fadeInDown")
+      
+      shinyjs::delay(300, {
+        shinyjs::removeClass(id = "anim_kappa_box", class = "hidden-anim-box")
+        startAnim(session, "anim_kappa_box", "fadeInDown")
+      })
+      
+      shinyjs::delay(600, {
+        shinyjs::removeClass(id = "anim_trees_box", class = "hidden-anim-box")
+        startAnim(session, "anim_trees_box", "fadeInDown")
+      })
+    }
+  }, ignoreInit = TRUE)
+
+  observeEvent(c(input$btn_predict, input$fil_provinsi, input$fil_kategori), {
+    req(input$sidebar == "randomforest")
+    startAnim(session, "anim_akurasi_box", "pulse")
+  }, ignoreInit = TRUE)
 
   # ---- CONFUSION MATRIX HEATMAP ----
   output$plot_cm <- renderPlotly({
