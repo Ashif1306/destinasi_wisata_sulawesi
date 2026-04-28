@@ -17,7 +17,7 @@ Dashboard interaktif berbasis **R Shiny** yang dirancang untuk melakukan eksplor
 ### 3. 🌲 Prediksi Random Forest (RF)
 *   **Model Klasifikasi**: Memprediksi label rekomendasi (*Terbaik, Baik, Sedang, Buruk*) berdasarkan fitur-fitur destinasi.
 *   **Evaluasi Model**: Menampilkan Confusion Matrix, Precision, Recall, dan tingkat konvergensi OOB Error.
-*   **Simulator Prediksi**: Masukkan parameter destinasi (koordinat, rating, harga) untuk mendapatkan rekomendasi instan dari model.
+**Simulator Prediksi**: Masukkan parameter destinasi (koordinat, rating, harga) untuk mendapatkan rekomendasi instan dari model.
 
 ## 🛠️ Teknologi yang Digunakan
 
@@ -30,7 +30,7 @@ Dashboard interaktif berbasis **R Shiny** yang dirancang untuk melakukan eksplor
 
 ## 📦 Instalasi & Cara Menjalankan
 
-1.  Pastikan Anda telah menginstal [R](https://cran.r-project.org/) dan [RStudio](https://posit.co/download/rstudio-desktop/).
+1.  Pastikan telah menginstal [R](https://cran.r-project.org/) dan [RStudio](https://posit.co/download/rstudio-desktop/).
 2.  Clone atau unduh repositori ini.
 3.  Buka file `app.R` di RStudio.
 4.  Instal dependensi yang diperlukan dengan menjalankan perintah berikut di Console R:
@@ -47,4 +47,4 @@ Aplikasi menggunakan dataset `df_clustered` yang berisi informasi:
 *   `cluster` (Hasil K-Means)
 
 ---
-*Dibuat untuk tugas Machine Learning - Semester 6.*
+Dibuat untuk tugas Machine Learning - Kelompok 8
