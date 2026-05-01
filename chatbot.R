@@ -328,7 +328,8 @@ sylva_chatbot_server <- function(input, output, session, df_final, cluster_summa
     history       = list(),
     loading       = FALSE,
     mem_kabupaten = "",   # kabupaten terakhir yang dibahas
-    mem_destinasi = ""    # destinasi spesifik terakhir yang dibahas
+    mem_destinasi = "",   # destinasi spesifik terakhir yang dibahas
+    user_name     = ""    # nama user jika disebutkan di awal percakapan
   )
 
   # ---------------------------------------------------------------
@@ -532,10 +533,12 @@ sylva_chatbot_server <- function(input, output, session, df_final, cluster_summa
       "K-Means k=4: ", klaster_info, "\n\n",
       "### KATALOG DESTINASI (Nama|Kab|Prov|Kat|Klaster|LabelRF|Rating|Review|Harga|ALAMAT|DESC) ###\n",
       if (!is.null(entity$kab_filter) && nzchar(entity$kab_filter))
-        paste0("PENTING: Semua baris di bawah HANYA dari ", entity$kab_filter,
-               ". JANGAN sebut destinasi dari kabupaten/kota lain!\n")
+        paste0("DATA AKTIF: Katalog berikut berisi destinasi di ", entity$kab_filter,
+               " sesuai konteks percakapan. WAJIB gunakan data ini untuk menjawab.\n",
+               if (!is.null(entity$context_note) && nzchar(entity$context_note))
+                 paste0("Konteks: ", entity$context_note, "\n") else "")
       else
-        "Angka jumlah HANYA dari STATISTIK RESMI, bukan dari menghitung baris ini.\n",
+        "Gunakan katalog di bawah untuk menjawab. Angka jumlah dari STATISTIK RESMI.\n",
       catalog, "\n\n",
       "### CARA KERJA SYLVA ###\n",
       "1. Pertanyaan JUMLAH wisata → pakai angka STATISTIK RESMI / FAKTA WAJIB.\n",
@@ -554,15 +557,18 @@ sylva_chatbot_server <- function(input, output, session, df_final, cluster_summa
   # ---------------------------------------------------------------
   # PROMPT BUILDER: Mode FOLLOWUP (ringan, hemat token)
   # ---------------------------------------------------------------
-  build_followup_prompt <- function(mem_destinasi, mem_kabupaten) {
+  build_followup_prompt <- function(mem_destinasi, mem_kabupaten, user_name = "") {
+    # Sapa user dengan namanya jika diketahui
+    sapa <- if (nzchar(user_name)) paste0("Nama user: ", user_name, ". ") else ""
+
     ctx_note <- if (nzchar(mem_destinasi)) {
-      paste0("Konteks aktif: destinasi '", mem_destinasi, "'",
+      paste0(sapa, "Konteks aktif: destinasi '", mem_destinasi, "'",
              if (nzchar(mem_kabupaten)) paste0(" di '", mem_kabupaten, "'") else "",
              ".\n")
     } else if (nzchar(mem_kabupaten)) {
-      paste0("Konteks aktif: Kabupaten/Kota '", mem_kabupaten, "'.\n")
+      paste0(sapa, "Konteks aktif: Kabupaten/Kota '", mem_kabupaten, "'.\n")
     } else {
-      "Tidak ada konteks spesifik.\n"
+      paste0(sapa, "Tidak ada konteks spesifik.\n")
     }
 
     sys <- paste0(
@@ -570,8 +576,10 @@ sylva_chatbot_server <- function(input, output, session, df_final, cluster_summa
       "Riwayat percakapan sudah mencakup semua data yang dibutuhkan.\n",
       ctx_note,
       "Aturan:\n",
-      "- Jawab secara natural dan ringkas.\n",
+      "- Jika user menyebutkan namanya di riwayat, ingat dan gunakan namanya.\n",
+      "- Jawab secara natural dan ringkas berdasarkan riwayat chat.\n",
       "- Jangan ulangi data yang sudah disebutkan kecuali diminta.\n",
+      "- JANGAN mengarang nama orang, nama tempat, atau fakta yang tidak ada di riwayat.\n",
       "- Bahasa santai + emoji secukupnya.\n",
       "- Akhiri dengan pertanyaan balik jika relevan.\n",
       "- Di luar pariwisata Sulawesi: tolak sopan + sedikit humor.\n"
@@ -655,10 +663,15 @@ sylva_chatbot_server <- function(input, output, session, df_final, cluster_summa
         }
       } else if (nzchar(chat_state$mem_kabupaten)) {
         # Sedang bahas kabupaten → kirim daftar HANYA kabupaten tersebut
+        # Sertakan context_note agar LLM tahu mengapa ia menerima data kabupaten ini
+        ctx_note_mem <- paste0("User meminta informasi/rekomendasi wisata di ",
+                               chat_state$mem_kabupaten, ".")
         entity_mem <- list(type = "kabupaten", dest_row = NULL,
-                           kab_filter = chat_state$mem_kabupaten)
+                           kab_filter = chat_state$mem_kabupaten,
+                           context_note = ctx_note_mem)
       } else {
-        entity_mem <- list(type = "followup", dest_row = NULL, kab_filter = NULL)
+        entity_mem <- list(type = "followup", dest_row = NULL, kab_filter = NULL,
+                           context_note = NULL)
       }
       sys_prompt <- build_data_prompt(chat_state$history, df_final, entity_mem)
 
@@ -666,17 +679,44 @@ sylva_chatbot_server <- function(input, output, session, df_final, cluster_summa
       # TAHAP 3b: Chitchat murni → prompt ringan jika ada memori, data umum jika tidak
       has_memory <- nzchar(chat_state$mem_destinasi) || nzchar(chat_state$mem_kabupaten)
       if (has_memory && length(chat_state$history) >= 4) {
-        sys_prompt <- build_followup_prompt(chat_state$mem_destinasi, chat_state$mem_kabupaten)
+        sys_prompt <- build_followup_prompt(chat_state$mem_destinasi,
+                                            chat_state$mem_kabupaten,
+                                            chat_state$user_name)
       } else {
-        entity_general <- list(type = "followup", dest_row = NULL, kab_filter = NULL)
+        entity_general <- list(type = "followup", dest_row = NULL, kab_filter = NULL,
+                               context_note = NULL)
         sys_prompt <- build_data_prompt(chat_state$history, df_final, entity_general)
       }
     }
 
-    # 5. Susun payload (batasi riwayat maks 10 pertukaran terakhir)
+    # 4b. Ekstrak nama user dari pesan awal jika belum tersimpan
+    if (!nzchar(chat_state$user_name) && length(chat_state$history) <= 6) {
+      early_text <- tolower(paste(sapply(head(chat_state$history, 6), function(x) x$content), collapse = " "))
+      # Pola: "nama saya X", "saya X", "panggil saya X", "halo saya X", "halo, saya X"
+      name_match <- regmatches(early_text,
+        regexpr("(?:nama saya|panggil saya|halo[,!]? saya|saya) ([a-z]{3,12})",
+                early_text, perl = TRUE))
+      if (length(name_match) > 0) {
+        extracted <- trimws(sub(".*(?:nama saya|panggil saya|halo[,!]? saya|saya) ", "", name_match[1], perl = TRUE))
+        # Jangan simpan kata umum sebagai nama
+        not_names <- c("orang", "dari", "butuh", "mau", "ingin", "perlu", "akan", "bisa")
+        if (nchar(extracted) >= 3 && !(extracted %in% not_names)) {
+          chat_state$user_name <- extracted
+          message("[SYLVA] Nama user terdeteksi: ", extracted)
+        }
+      }
+    }
+
+    # 5. Susun payload — preservasi 2 pesan pertama + 8 pesan terbaru
+    # Ini mencegah SYLVA lupa nama/konteks yang diperkenalkan di awal percakapan.
     hist <- chat_state$history
     n_h  <- length(hist)
-    if (n_h > 10) hist <- hist[(n_h - 9):n_h]
+    if (n_h > 10) {
+      first_msgs  <- hist[1:min(2, n_h)]              # selalu simpan 2 pesan pembuka
+      recent_msgs <- hist[max(3, n_h - 7):n_h]        # 8 pesan terbaru
+      # Gabungkan, hilangkan duplikat jika overlap
+      hist <- unique(c(first_msgs, recent_msgs))
+    }
 
     messages_payload <- c(list(list(role = "system", content = sys_prompt)), hist)
 
