@@ -17,6 +17,12 @@ library(jsonlite)
 library(shinyjs)
 library(shinyanimate)
 library(shinycssloaders)
+library(shinyWidgets)
+
+source("chatbot.R")
+
+# Muat environment variables dari .Renviron (API keys, dll.)
+readRenviron(".Renviron")
 
 # ============================================================
 # GLOBAL: Supabase Config & Data Loading
@@ -282,6 +288,30 @@ df_final <- df_clustered %>%
   )
 
 # ============================================================
+# DF_CHATBOT: df_final + pastikan alamat & deskripsi tersedia
+# df_final sudah mewarisi kolom-kolom ini dari df_raw melalui
+# pipeline: df_raw → df_clustered → df_final
+# Tidak perlu join — cukup pastikan kolom ada & isi fallback.
+# ============================================================
+df_chatbot <- df_final %>%
+  mutate(
+    alamat = if ("alamat" %in% colnames(df_final)) {
+      ifelse(is.na(alamat) | trimws(as.character(alamat)) == "",
+             "Alamat belum tersedia.", as.character(alamat))
+    } else {
+      "Alamat belum tersedia."
+    },
+    deskripsi_wisata = if ("deskripsi_wisata" %in% colnames(df_final)) {
+      ifelse(is.na(deskripsi_wisata) | trimws(as.character(deskripsi_wisata)) == "",
+             "Deskripsi belum tersedia.", as.character(deskripsi_wisata))
+    } else {
+      "Deskripsi belum tersedia."
+    }
+  )
+
+
+
+# ============================================================
 # PCA untuk visualisasi K-Means
 # ============================================================
 
@@ -431,6 +461,17 @@ ui <- dashboardPage(
         #anim_kappa_box .small-box:hover { transform: translateY(-5px) scale(1.03) !important; box-shadow: 0 16px 36px rgba(52,152,219,0.45) !important; filter: brightness(1.08) !important; }
         #anim_kappa_box .small-box:hover .icon { animation: wiggle 0.6s ease; }
         .hidden-anim-box { visibility: hidden; }
+        /* Style & Animasi Interaktif Input Simulator */
+        #sim_input_panel .form-control {
+          border-radius: 10px !important;
+          border: 2px solid #e2e8f0;
+          transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        #sim_input_panel .form-control:focus {
+          border-color: #20C997;
+          box-shadow: 0 0 0 4px rgba(32, 201, 151, 0.25);
+          transform: translateY(-2px);
+        }
       ")),
       # ---- Script: JS handler untuk update dropdown Kabupaten ----
       tags$script(HTML("
@@ -444,11 +485,11 @@ ui <- dashboardPage(
             sel.appendChild(opt);
           });
           sel.value = 'Semua';
-          // Beritahu Shiny bahwa nilai input berubah
           $(sel).trigger('change');
         });
       "))
     ),
+    sylva_chatbot_dependencies(),
     tabItems(
       # ========== TAB 1: OVERVIEW ==========
       tabItem(
@@ -583,15 +624,16 @@ ui <- dashboardPage(
               style = "font-size:12px;color:#888;margin-bottom:8px;",
               "ℹ️ Prediksi 4 kelas (Terbaik / Baik / Sedang / Buruk) berdasarkan lokasi, rating, jumlah review, harga, dan kategori harga."
             ),
-            fluidRow(
-              column(2, numericInput("sim_lat", "Latitude", value = -5.14, step = 0.01)),
-              column(2, numericInput("sim_long", "Longitude", value = 119.41, step = 0.01)),
-              column(2, numericInput("sim_rating", "Rating", value = 4.3, min = 1, max = 5, step = 0.1)),
-              column(2, numericInput("sim_review", "Jumlah Review", value = 1000, min = 10)),
-              column(2, numericInput("sim_harga", "Harga (Rp)", value = 10000, min = 0)),
-              column(2, selectInput("sim_kat_harga", "Kategori Harga",
-                choices = c("Gratis", "Murah", "Sedang", "Mahal")
-              ))
+            tags$div(
+              id = "sim_input_panel",
+              fluidRow(
+                column(2, numericInput("sim_lat", "Latitude", value = -5.14, step = 0.01)),
+                column(2, numericInput("sim_long", "Longitude", value = 119.41, step = 0.01)),
+                column(2, numericInput("sim_rating", "Rating", value = 4.3, min = 1, max = 5, step = 0.1)),
+                column(2, numericInput("sim_review", "Jumlah Review", value = 1000, min = 10)),
+                column(2, numericInput("sim_harga", "Harga (Rp)", value = 10000, min = 0)),
+                column(2, shinyjs::disabled(textInput("sim_kat_harga", "Kategori Harga", value = "Sedang")))
+              )
             ),
             fluidRow(
               column(2, actionButton("btn_predict", "🔮 Prediksi",
@@ -603,7 +645,7 @@ ui <- dashboardPage(
                   id = "sim_result",
                   style = "font-size:20px;font-weight:700;margin-top:5px;padding:10px 20px;
                              border-radius:10px;background:#f8f9fa;",
-                  uiOutput("pred_result")
+                  withSpinner(uiOutput("pred_result"), type = 1, color = "#64748b", size = 0.5)
                 )
               )
             )
@@ -622,7 +664,9 @@ ui <- dashboardPage(
           )
         )
       )
-    )
+    ),
+
+    sylva_chatbot_ui()
   )
 )
 
@@ -1273,43 +1317,49 @@ server <- function(input, output, session) {
   })
 
   # ---- ANIMASI VALUE BOXES RF (Staggered: 0ms / 500ms / 1000ms) ----
-  observeEvent(input$sidebar, {
-    if (input$sidebar == "randomforest") {
+  observeEvent(input$sidebar,
+    {
+      if (input$sidebar == "randomforest") {
+        # Reset semua box ke state tersembunyi dulu, agar animasi terulang setiap masuk tab
+        shinyjs::addClass(id = "anim_akurasi_box", class = "hidden-anim-box")
+        shinyjs::addClass(id = "anim_kappa_box", class = "hidden-anim-box")
+        shinyjs::addClass(id = "anim_trees_box", class = "hidden-anim-box")
 
-      # Reset semua box ke state tersembunyi dulu, agar animasi terulang setiap masuk tab
-      shinyjs::addClass(id = "anim_akurasi_box", class = "hidden-anim-box")
-      shinyjs::addClass(id = "anim_kappa_box",   class = "hidden-anim-box")
-      shinyjs::addClass(id = "anim_trees_box",   class = "hidden-anim-box")
+        # Box 1 – Akurasi: muncul langsung (0ms)
+        shinyjs::delay(50, {
+          shinyjs::removeClass(id = "anim_akurasi_box", class = "hidden-anim-box")
+          startAnim(session, "anim_akurasi_box", "fadeInDown")
+        })
 
-      # Box 1 – Akurasi: muncul langsung (0ms)
-      shinyjs::delay(50, {
-        shinyjs::removeClass(id = "anim_akurasi_box", class = "hidden-anim-box")
-        startAnim(session, "anim_akurasi_box", "fadeInDown")
-      })
+        # Box 2 – Kappa: muncul setelah 500ms
+        shinyjs::delay(500, {
+          shinyjs::removeClass(id = "anim_kappa_box", class = "hidden-anim-box")
+          startAnim(session, "anim_kappa_box", "fadeInDown")
+        })
 
-      # Box 2 – Kappa: muncul setelah 500ms
-      shinyjs::delay(500, {
-        shinyjs::removeClass(id = "anim_kappa_box", class = "hidden-anim-box")
-        startAnim(session, "anim_kappa_box", "fadeInDown")
-      })
+        # Box 3 – Trees: muncul setelah 1000ms
+        shinyjs::delay(1000, {
+          shinyjs::removeClass(id = "anim_trees_box", class = "hidden-anim-box")
+          startAnim(session, "anim_trees_box", "fadeInDown")
+        })
+      }
+    },
+    ignoreInit = TRUE
+  )
 
-      # Box 3 – Trees: muncul setelah 1000ms
-      shinyjs::delay(1000, {
-        shinyjs::removeClass(id = "anim_trees_box", class = "hidden-anim-box")
-        startAnim(session, "anim_trees_box", "fadeInDown")
-      })
-    }
-  }, ignoreInit = TRUE)
-
-  observeEvent(c(input$btn_predict, input$fil_provinsi, input$fil_kategori), {
-    req(input$sidebar == "randomforest")
-    startAnim(session, "anim_akurasi_box", "pulse")
-  }, ignoreInit = TRUE)
+  observeEvent(c(input$btn_predict, input$fil_provinsi, input$fil_kategori),
+    {
+      req(input$sidebar == "randomforest")
+      startAnim(session, "anim_akurasi_box", "pulse")
+    },
+    ignoreInit = TRUE
+  )
 
   # ---- CONFUSION MATRIX HEATMAP (animasi: diagonal dulu → menyamping) ----
   output$plot_cm <- renderPlotly({
     req(input$sidebar == "randomforest")
-    input$fil_provinsi; input$fil_kategori
+    input$fil_provinsi
+    input$fil_kategori
 
     cm_table <- as.data.frame(rf_cm$table)
 
@@ -1319,12 +1369,12 @@ server <- function(input, output, session) {
     plot_ly(
       x = labels, y = labels,
       # Mulai dengan matrix nol (semua sel tersembunyi)
-      z    = matrix(0, nrow = length(labels), ncol = length(labels)),
+      z = matrix(0, nrow = length(labels), ncol = length(labels)),
       type = "heatmap",
       colorscale = list(
-        c(0,   "#f0f4ff"),
+        c(0, "#f0f4ff"),
         c(0.5, "#818cf8"),
-        c(1,   "#6C63FF")
+        c(1, "#6C63FF")
       ),
       zmin = 0,
       zmax = max(cm_table$Freq),
@@ -1335,13 +1385,14 @@ server <- function(input, output, session) {
     ) %>%
       layout(
         paper_bgcolor = "transparent",
-        plot_bgcolor  = "transparent",
-        xaxis = list(title = "Aktual",   tickfont = list(size = 12)),
+        plot_bgcolor = "transparent",
+        xaxis = list(title = "Aktual", tickfont = list(size = 12)),
         yaxis = list(title = "Prediksi", tickfont = list(size = 12))
       ) %>%
       plotly::config(displayModeBar = FALSE) %>%
       # Inject animasi via JavaScript: diagonal muncul dulu, lalu sweep ke off-diagonal
-      htmlwidgets::onRender(sprintf("
+      htmlwidgets::onRender(sprintf(
+        "
         function(el, x) {
           var gd = el;
 
@@ -1420,9 +1471,10 @@ server <- function(input, output, session) {
         jsonlite::toJSON(
           as.vector(t(
             matrix(cm_table$Freq,
-                   nrow = length(labels),
-                   ncol = length(labels),
-                   dimnames = list(labels, labels))[labels, labels]
+              nrow = length(labels),
+              ncol = length(labels),
+              dimnames = list(labels, labels)
+            )[labels, labels]
           ))
         )
       ))
@@ -1432,14 +1484,15 @@ server <- function(input, output, session) {
   # ---- FEATURE IMPORTANCE ----
   output$plot_importance <- renderPlotly({
     req(input$sidebar == "randomforest")
-    input$fil_provinsi; input$fil_kategori
+    input$fil_provinsi
+    input$fil_kategori
 
     imp <- as.data.frame(importance(rf_model)) %>%
       rownames_to_column("Feature") %>%
       arrange(desc(MeanDecreaseGini))
 
     plot_ly(imp,
-      x = ~MeanDecreaseGini, y = ~reorder(Feature, MeanDecreaseGini),
+      x = ~MeanDecreaseGini, y = ~ reorder(Feature, MeanDecreaseGini),
       type = "bar", orientation = "h",
       marker = list(
         color = colorRampPalette(c("#43C6AC", "#1a9e89"))(nrow(imp)),
@@ -1448,10 +1501,10 @@ server <- function(input, output, session) {
     ) %>%
       layout(
         paper_bgcolor = "transparent",
-        plot_bgcolor  = "transparent",
+        plot_bgcolor = "transparent",
         xaxis = list(
           title     = "Mean Decrease Gini",
-          rangemode = "nonnegative",   # sumbu tidak melebar ke < 0
+          rangemode = "nonnegative", # sumbu tidak melebar ke < 0
           range     = c(0, max(imp$MeanDecreaseGini) * 1.12)
         ),
         yaxis = list(title = ""),
@@ -1489,8 +1542,9 @@ server <- function(input, output, session) {
   # ---- OOB ERROR RATE PLOT ----
   output$plot_oob <- renderPlotly({
     req(input$sidebar == "randomforest")
-    input$fil_provinsi; input$fil_kategori
-    
+    input$fil_provinsi
+    input$fil_kategori
+
     plot_ly(oob_df,
       x = ~trees, y = ~oob_error,
       type = "scatter", mode = "lines",
@@ -1547,7 +1601,8 @@ server <- function(input, output, session) {
   # ---- PER-CLASS PRECISION & RECALL PLOT ----
   output$plot_perclass <- renderPlotly({
     req(input$sidebar == "randomforest")
-    input$fil_provinsi; input$fil_kategori
+    input$fil_provinsi
+    input$fil_kategori
 
     metric_colors <- c(Precision = "#6C63FF", Recall = "#43C6AC")
     plot_ly(per_class_df,
@@ -1576,23 +1631,23 @@ server <- function(input, output, session) {
       htmlwidgets::onRender("
         function(el, x) {
           var gd = el;
-          
+
           // Grafik ini memiliki multiple traces karena di-group (Precision & Recall)
           var n_traces = gd.data.length;
           var original_y = [];
           var zero_y = [];
           var traces_idx = [];
-          
+
           for (var i = 0; i < n_traces; i++) {
             var y_arr = gd.data[i].y.slice();
             original_y.push({ y: y_arr });
             zero_y.push(y_arr.map(function() { return 0; }));
             traces_idx.push(i);
           }
-          
+
           // Set semua nilai Y ke 0 terlebih dahulu agar bar tersembunyi di bawah
           Plotly.restyle(gd, {y: zero_y}, traces_idx);
-          
+
           // Animasikan ke nilai aslinya bersamaan
           setTimeout(function() {
             Plotly.animate(gd, {
@@ -1609,11 +1664,47 @@ server <- function(input, output, session) {
   })
 
   # ---- SIMULATOR PREDIKSI ----
+
+  # Auto-update Kategori Harga berdasarkan input harga
+  observeEvent(input$sim_harga, {
+    h <- input$sim_harga
+    kat <- "Gratis"
+    if (is.na(h) || h <= 0) {
+      kat <- "Gratis"
+    } else if (h >= 1 && h <= 9999) {
+      kat <- "Murah"
+    } else if (h >= 10000 && h <= 19999) {
+      kat <- "Sedang"
+    } else if (h >= 20000) {
+      kat <- "Mahal"
+    }
+    updateTextInput(session, "sim_kat_harga", value = kat)
+  })
+
   output$pred_result <- renderUI({
     tags$span(style = "color:#888;", "👆 Isi form lalu klik Prediksi")
   })
 
   observeEvent(input$btn_predict, {
+    # Validasi Input Kosong
+    if (is.na(input$sim_lat) || is.na(input$sim_long) || is.na(input$sim_rating) || is.na(input$sim_review) || is.na(input$sim_harga)) {
+      startAnim(session, "sim_input_panel", "shake")
+      showNotification("Semua kolom input harus diisi!", type = "error")
+      return()
+    }
+
+    # Animasi Tombol & Disable sementara
+    shinyjs::disable("btn_predict")
+    startAnim(session, "btn_predict", "pulse")
+
+    # Kosongkan hasil (trigger spinner)
+    output$pred_result <- renderUI({
+      HTML("")
+    })
+
+    # Simulasi Loading
+    Sys.sleep(0.8)
+
     new_data <- data.frame(
       lat = input$sim_lat,
       long = input$sim_long,
@@ -1638,11 +1729,30 @@ server <- function(input, output, session) {
     ico <- icons[p_char]
     dsc <- descs[p_char]
 
+    # Sweet Alert untuk semua kategori
+    if (p_char == "Terbaik") {
+      sendSweetAlert(session, title = "Luar Biasa! 🎉✨", text = "Destinasi Terbaik Ditemukan! Sangat direkomendasikan.", type = "success")
+    } else if (p_char == "Baik") {
+      sendSweetAlert(session, title = "Bagus! 👍", text = "Destinasi ini diprediksi BAIK untuk dikunjungi.", type = "info")
+    } else if (p_char == "Sedang") {
+      sendSweetAlert(session, title = "Cukup Menarik 👌", text = "Destinasi ini masuk kategori SEDANG, bisa jadi alternatif pilihan.", type = "info")
+    } else if (p_char == "Buruk") {
+      sendSweetAlert(session, title = "Pertimbangkan Lagi ⚠️", text = "Destinasi ini diprediksi BURUK, sebaiknya cari opsi lain.", type = "warning")
+    }
+
+    # Render Hasil Sequential
     output$pred_result <- renderUI({
-      tags$span(
-        style = paste0("color:", col, ";"),
-        paste0(ico, " ", p_char, " — ", dsc)
+      tags$div(
+        tags$div(id = "sim_res_main", style = paste0("color:", col, ";"), paste0(ico, " ", p_char)),
+        tags$div(id = "sim_res_desc", class = "hidden-anim-box", style = "font-size:14px;color:#666;margin-top:5px;", dsc)
       )
+    })
+
+    # Jalankan animasi reveal
+    shinyjs::delay(300, {
+      shinyjs::removeClass(id = "sim_res_desc", class = "hidden-anim-box")
+      startAnim(session, "sim_res_desc", "fadeInUp")
+      shinyjs::enable("btn_predict")
     })
   })
 
@@ -1674,6 +1784,11 @@ server <- function(input, output, session) {
     ) %>%
       formatCurrency("Harga (Rp)", currency = "Rp ", digits = 0, mark = ",")
   })
+
+  # ============================================================
+  # SYLVA CHATBOT – Delegasi Server
+  # ============================================================
+  sylva_chatbot_server(input, output, session, df_chatbot, cluster_summary, rf_cm)
 }
 
 # ============================================================
