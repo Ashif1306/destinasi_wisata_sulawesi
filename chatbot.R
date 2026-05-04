@@ -165,6 +165,21 @@ sylva_chatbot_dependencies <- function() {
       .sylva-welcome .sylva-wave {
         font-size:32px; display:block; margin-bottom:6px;
       }
+      
+      /* Mobile Responsiveness untuk Chatbot Panel */
+      @media (max-width: 480px) {
+        #sylva-panel {
+          width: calc(100vw - 32px) !important;
+          height: calc(100vh - 130px) !important;
+          max-height: 600px !important;
+          right: 16px !important;
+          bottom: 95px !important;
+        }
+        #sylva-fab {
+          right: 16px !important;
+          bottom: 20px !important;
+        }
+      }
       /* ====== END SYLVA ====== */
     ")),
     tags$script(HTML("
@@ -520,7 +535,15 @@ sylva_chatbot_server <- function(input, output, session, df_final, cluster_summa
     sys <- paste0(
       pinned_block,
       "Kamu adalah SYLVA - asisten analitik pariwisata Sulawesi yang cerdas, hangat, dan asyik!\n",
-      "Kamu punya akses ke database & hasil analisis ML pariwisata Sulawesi.\n\n",
+      "Kamu punya akses ke database & hasil analisis ML pariwisata Sulawesi.\n",
+      "Kamu juga SANGAT paham tentang Machine Learning, Data Science, dan Statistik karena kamu dibangun dengan teknologi ML.\n\n",
+      "### KEPRIBADIAN SYLVA ###\n",
+      "- Kamu asyik diajak ngobrol santai, humoris tapi tetap informatif.\n",
+      "- Kamu bisa membahas topik umum: sapa user, basa-basi, motivasi, candaan ringan.\n",
+      "- Kamu SANGAT AHLI di bidang Machine Learning dan bisa menjelaskan konsep ML dengan cara yang mudah dipahami.\n",
+      "- Topik ML yang bisa kamu bahas: K-Means Clustering, Random Forest, Decision Tree, KNN, SVM, Neural Network, Deep Learning, NLP, Regresi, Klasifikasi, Evaluasi Model (Accuracy, Precision, Recall, F1-Score, Confusion Matrix, Silhouette Score), PCA, Feature Engineering, Overfitting, Underfitting, Cross-Validation, dll.\n",
+      "- Saat menjelaskan ML, kaitkan dengan proyek analisis pariwisata ini jika relevan.\n",
+      "- Untuk topik SANGAT di luar keahlianmu (politik, medis, hukum): tolak sopan + sedikit humor, arahkan kembali.\n\n",
       "### STATISTIK DATASET RESMI (sumber kebenaran untuk angka jumlah) ###\n",
       "PERINGATAN: Katalog di bawah adalah SAMPEL. JANGAN hitung jumlah dari sana!\n",
       "Total destinasi: ", nrow(d_base), "\n\n",
@@ -528,9 +551,13 @@ sylva_chatbot_server <- function(input, output, session, df_final, cluster_summa
       "Per Kabupaten/Kota:\n", kab_txt, "\n\n",
       "Per Kategori:\n", kat_txt, "\n\n",
       "Label RF:\n", lbl_txt, "\n\n",
-      "### HASIL ANALISIS ML ###\n",
+      "### HASIL ANALISIS ML (bisa dibahas detail jika ditanya) ###\n",
       "Random Forest: akurasi ", rf_acc, "% (4 kelas: Terbaik/Baik/Sedang/Buruk)\n",
-      "K-Means k=4: ", klaster_info, "\n\n",
+      "Penjelasan RF: Model ensemble yang menggabungkan banyak decision tree untuk klasifikasi. Setiap tree dilatih pada subset acak data (bagging). Prediksi akhir = voting mayoritas dari semua tree.\n",
+      "K-Means k=4: ", klaster_info, "\n",
+      "Penjelasan K-Means: Algoritma unsupervised yang mengelompokkan data ke k klaster berdasarkan kedekatan ke centroid. Iteratif: assign → update centroid → repeat sampai konvergen. Elbow method dipakai untuk menentukan k optimal.\n",
+      "Evaluasi K-Means: Silhouette Score mengukur seberapa baik objek cocok dengan klasternya vs klaster terdekat (-1 s/d 1, semakin tinggi semakin baik).\n",
+      "PCA: Principal Component Analysis digunakan untuk reduksi dimensi, memvisualisasikan data multidimensi ke 2D.\n\n",
       "### KATALOG DESTINASI (Nama|Kab|Prov|Kat|Klaster|LabelRF|Rating|Review|Harga|ALAMAT|DESC) ###\n",
       if (!is.null(entity$kab_filter) && nzchar(entity$kab_filter))
         paste0("DATA AKTIF: Katalog berikut berisi destinasi di ", entity$kab_filter,
@@ -548,7 +575,9 @@ sylva_chatbot_server <- function(input, output, session, df_final, cluster_summa
       "5. Destinasi tidak ada di katalog → akui tidak ada, jangan mengarang.\n",
       "6. Bahasa santai + emoji secukupnya. Bullet list jika banyak item.\n",
       "7. Akhiri dengan pertanyaan balik agar obrolan mengalir.\n",
-      "8. Di luar pariwisata Sulawesi: tolak sopan + sedikit humor.\n"
+      "8. Pertanyaan ML / Data Science → jawab dengan antusias dan detail, kaitkan dengan proyek ini jika bisa.\n",
+      "9. Obrolan santai / sapa → balas hangat dan ramah, tunjukkan kepribadianmu.\n",
+      "10. Topik sangat di luar keahlian (medis/hukum/politik): tolak sopan + humor ringan.\n"
     )
     message("[SYLVA][data] prompt: ", nchar(sys), " chars (~", round(nchar(sys) / 4), " tokens)")
     sys
@@ -573,16 +602,20 @@ sylva_chatbot_server <- function(input, output, session, df_final, cluster_summa
 
     sys <- paste0(
       "Kamu adalah SYLVA - asisten analitik pariwisata Sulawesi yang cerdas, hangat, dan asyik!\n",
+      "Kamu juga SANGAT paham Machine Learning, Data Science, dan Statistik.\n",
       "Riwayat percakapan sudah mencakup semua data yang dibutuhkan.\n",
       ctx_note,
       "Aturan:\n",
-      "- Jika user menyebutkan namanya di riwayat, ingat dan gunakan namanya.\n",
+      "- Jika user menyebutkan namanya di riwayat (HANYA dari pesan user, bukan pesan bot), ingat dan gunakan namanya.\n",
+      "- JANGAN pernah mengekstrak nama dari pesan bot/asisten. Nama hanya valid jika user sendiri yang menyebutkan.\n",
       "- Jawab secara natural dan ringkas berdasarkan riwayat chat.\n",
       "- Jangan ulangi data yang sudah disebutkan kecuali diminta.\n",
       "- JANGAN mengarang nama orang, nama tempat, atau fakta yang tidak ada di riwayat.\n",
       "- Bahasa santai + emoji secukupnya.\n",
       "- Akhiri dengan pertanyaan balik jika relevan.\n",
-      "- Di luar pariwisata Sulawesi: tolak sopan + sedikit humor.\n"
+      "- Pertanyaan ML / Data Science → jawab dengan antusias! Kamu ahli di bidang ini.\n",
+      "- Obrolan santai → balas hangat dan ramah, kamu punya kepribadian yang menyenangkan.\n",
+      "- Topik sangat di luar keahlian (medis/hukum/politik): tolak sopan + humor ringan.\n"
     )
     message("[SYLVA][followup] Lightweight prompt ~", round(nchar(sys) / 4), " tokens")
     sys
@@ -690,19 +723,29 @@ sylva_chatbot_server <- function(input, output, session, df_final, cluster_summa
     }
 
     # 4b. Ekstrak nama user dari pesan awal jika belum tersimpan
-    if (!nzchar(chat_state$user_name) && length(chat_state$history) <= 6) {
-      early_text <- tolower(paste(sapply(head(chat_state$history, 6), function(x) x$content), collapse = " "))
-      # Pola: "nama saya X", "saya X", "panggil saya X", "halo saya X", "halo, saya X"
-      name_match <- regmatches(early_text,
-        regexpr("(?:nama saya|panggil saya|halo[,!]? saya|saya) ([a-z]{3,12})",
-                early_text, perl = TRUE))
-      if (length(name_match) > 0) {
-        extracted <- trimws(sub(".*(?:nama saya|panggil saya|halo[,!]? saya|saya) ", "", name_match[1], perl = TRUE))
-        # Jangan simpan kata umum sebagai nama
-        not_names <- c("orang", "dari", "butuh", "mau", "ingin", "perlu", "akan", "bisa")
-        if (nchar(extracted) >= 3 && !(extracted %in% not_names)) {
-          chat_state$user_name <- extracted
-          message("[SYLVA] Nama user terdeteksi: ", extracted)
+    # PENTING: Hanya scan pesan USER (role == "user"), BUKAN pesan bot/assistant
+    # Ini mencegah false positive seperti mendeteksi "bantu" dari pesan bot
+    if (!nzchar(chat_state$user_name) && length(chat_state$history) <= 8) {
+      # Filter hanya pesan user dari 8 pesan pertama
+      user_msgs <- Filter(function(x) x$role == "user", head(chat_state$history, 8))
+      if (length(user_msgs) > 0) {
+        early_text <- tolower(paste(sapply(user_msgs, function(x) x$content), collapse = " "))
+        # Pola: "nama saya X", "panggil saya X", "saya X", "namaku X", "gue X", "aku X"
+        name_match <- regmatches(early_text,
+          regexpr("(?:nama saya|namaku|panggil (?:saya|aku|gue)|halo[,!]?\\s+(?:saya|aku)\\s+|perkenalkan[,!]?\\s+(?:saya|aku)\\s+)([a-z]{3,15})",
+                  early_text, perl = TRUE))
+        if (length(name_match) > 0) {
+          extracted <- trimws(sub(".*(?:nama saya|namaku|panggil (?:saya|aku|gue)|halo[,!]?\\s+(?:saya|aku)\\s+|perkenalkan[,!]?\\s+(?:saya|aku)\\s+)", "", name_match[1], perl = TRUE))
+          # Blocklist kata umum yang BUKAN nama orang
+          not_names <- c("orang", "dari", "butuh", "mau", "ingin", "perlu", "akan", "bisa",
+                         "bantu", "tanya", "cari", "lihat", "kasih", "tolong", "minta",
+                         "suka", "sedang", "lagi", "juga", "sudah", "belum", "harus",
+                         "wisata", "tempat", "destinasi", "pariwisata", "sulawesi",
+                         "tidak", "bukan", "dengan", "untuk", "yang", "sering")
+          if (nchar(extracted) >= 3 && !(extracted %in% not_names)) {
+            chat_state$user_name <- extracted
+            message("[SYLVA] Nama user terdeteksi: ", extracted)
+          }
         }
       }
     }
