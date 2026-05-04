@@ -1,4 +1,74 @@
 // ============================================================
+// Mobile Fix: Nonaktifkan keyboard pada Selectize dropdown filter
+// Masalah: Selectize.js merender kotak input pencarian di dalam
+// dropdown, sehingga keyboard virtual muncul saat filter diklik di HP.
+// Solusi: Set `readonly` pada input Selectize saat di mobile agar
+// dropdown tetap bisa diklik tapi keyboard tidak muncul.
+// ============================================================
+function disableSelectizeSearchOnMobile() {
+  if (window.innerWidth > 767) return; // Hanya untuk mobile
+  // Cari semua input di dalam elemen selectize
+  document.querySelectorAll('.selectize-input input').forEach(function(inp) {
+    // readonly mencegah keyboard muncul, tapi dropdown tetap bisa dibuka
+    inp.setAttribute('readonly', 'readonly');
+    // Paksa hilangkan focus agar keyboard tidak sempat muncul
+    inp.addEventListener('focus', function() {
+      if (window.innerWidth <= 767) {
+        this.setAttribute('readonly', 'readonly');
+        this.blur(); // Langsung blur agar keyboard dismiss
+      }
+    }, true);
+  });
+}
+
+// Jalankan saat dokumen sudah siap
+$(document).ready(function() {
+  // Jalankan sekali saat awal
+  setTimeout(disableSelectizeSearchOnMobile, 500);
+
+  // Gunakan MutationObserver untuk menangkap selectize yang dibuat secara dinamis oleh Shiny
+  var selectizeObserver = new MutationObserver(function(mutations) {
+    if (window.innerWidth > 767) return;
+    mutations.forEach(function(mutation) {
+      mutation.addedNodes.forEach(function(node) {
+        if (node.nodeType === 1) {
+          // Cek apakah node ini adalah elemen selectize atau memiliki anak selectize
+          var inputs = node.classList && node.classList.contains('selectize-input')
+            ? [node.querySelector('input')]
+            : node.querySelectorAll ? node.querySelectorAll('.selectize-input input') : [];
+          inputs.forEach(function(inp) {
+            if (inp) {
+              inp.setAttribute('readonly', 'readonly');
+              inp.addEventListener('focus', function() {
+                if (window.innerWidth <= 767) {
+                  this.setAttribute('readonly', 'readonly');
+                  this.blur();
+                }
+              }, true);
+            }
+          });
+        }
+      });
+    });
+  });
+
+  // Observasi seluruh body untuk menangkap selectize baru
+  selectizeObserver.observe(document.body, { childList: true, subtree: true });
+});
+
+// Jalankan juga setelah Shiny session siap (saat semua input sudah ter-render)
+$(document).on('shiny:sessioninitialized', function() {
+  setTimeout(disableSelectizeSearchOnMobile, 800);
+});
+
+// Jalankan ulang setiap kali Shiny update nilai input (menangkap re-render dropdown)
+$(document).on('shiny:value shiny:bound', function() {
+  if (window.innerWidth <= 767) {
+    setTimeout(disableSelectizeSearchOnMobile, 100);
+  }
+});
+
+// ============================================================
 // PCA 2D / 3D Toggle — Client-side panel switching
 // ============================================================
 function setPcaDim(dim) {

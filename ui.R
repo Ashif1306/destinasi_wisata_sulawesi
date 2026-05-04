@@ -57,6 +57,7 @@ ui <- dashboardPage(
     useShinyjs(),
     withAnim(),
     tags$head(
+      tags$link(rel = "icon", type = "image/png", href = "favicon.png"),
       tags$link(rel = "stylesheet", type = "text/css", href = "custom.css"),
       tags$script(src = "custom.js"),
       # Embed daftar nama wisata untuk autocomplete client-side

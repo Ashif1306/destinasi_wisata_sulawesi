@@ -1,0 +1,12 @@
+name: destinasi_wisata
+title: destinasi_wisata
+username: kelompoklima
+account: kelompoklima
+server: shinyapps.io
+hostUrl: https://api.shinyapps.io/v1
+appId: 17289797
+bundleId:
+url: https://wisatasulawesi.shinyapps.io/destinasi_wisata/
+version: 1
+asMultiple: FALSE
+asStatic: FALSE
