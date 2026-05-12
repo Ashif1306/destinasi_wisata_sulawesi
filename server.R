@@ -63,10 +63,6 @@ server <- function(input, output, session) {
     
     if (nzchar(mob)) {
       # Mobile: exact match saja — panel detail hanya tampil saat nama cocok persis.
-      # Pencarian parsial (1-2 huruf) tidak akan pernah exact match, jadi aman.
-      # freezeReactiveValue DIHAPUS: fungsi itu membekukan reaktivitas Shiny untuk
-      # input tersebut secara permanen di sesi itu, menyebabkan browser tidak bisa
-      # mengirim nilai baru → search bar "freeze" dan harus diklik ulang.
       res <- df_final %>% filter(tolower(nama_wisata) == tolower(mob)) %>% slice(1)
       if (nrow(res) > 0) res else NULL
     } else if (nzchar(desk) && desk != " ") {
@@ -76,6 +72,20 @@ server <- function(input, output, session) {
       NULL
     }
   })
+  
+  # ---- BUG FIX #1: Auto-redirect ke Overview saat mobile search memilih destinasi ----
+  # Saat user ada di tab lain (K-Means / RF / Dataset) dan memilih wisata dari
+  # mobile search panel, otomatis pindah ke tab Overview agar detail panel tampil.
+  observeEvent(input$mobile_search_query, {
+    mob <- trimws(input$mobile_search_query %||% "")
+    if (!nzchar(mob)) return()
+    # Cek apakah ada hasil exact match
+    res <- df_final %>% filter(tolower(nama_wisata) == tolower(mob)) %>% slice(1)
+    if (nrow(res) > 0) {
+      # Pindah ke tab Overview agar detail panel muncul
+      updateTabItems(session, "sidebar", selected = "overview")
+    }
+  }, ignoreInit = TRUE, ignoreNULL = TRUE)
   
   # df_overview: filter biasa (TANPA mobile search agar UI tidak nge-freeze saat mengetik)
   df_overview <- reactive({
@@ -195,11 +205,26 @@ server <- function(input, output, session) {
   })
   
   
-  observeEvent(c(input$ov_provinsi, input$ov_kabupaten, input$ov_kategori), {
-    if (!is.null(input$ov_search) && nzchar(trimws(input$ov_search))) {
-      updateSelectizeInput(session, "ov_search", selected = " ")
-    }
-  }, ignoreInit = TRUE)
+  # ---- BUG FIX #2: Reset detail mode saat filter overview atau sidebar diubah ----
+  # Ketika user sedang melihat detail wisata via mobile search, lalu mengubah
+  # filter (Provinsi / Kabupaten / Kategori / filter sidebar), tampilan harus
+  # kembali ke mode overview umum — persis seperti perilaku di desktop.
+  observeEvent(
+    c(input$ov_provinsi, input$ov_kabupaten, input$ov_kategori,
+      input$fil_provinsi, input$fil_kategori, input$fil_rating),
+    {
+      # Reset desktop search
+      if (!is.null(input$ov_search) && nzchar(trimws(input$ov_search))) {
+        updateSelectizeInput(session, "ov_search", selected = " ")
+      }
+      # Reset mobile search — ini yang menyebabkan detail panel tidak hilang sebelumnya
+      mob <- trimws(input$mobile_search_query %||% "")
+      if (nzchar(mob)) {
+        session$sendCustomMessage("resetMobileSearch", list())
+      }
+    },
+    ignoreInit = TRUE
+  )
   
   # ---- PETA LEAFLET ----
   pal_cluster <- colorFactor(

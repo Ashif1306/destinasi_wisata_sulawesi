@@ -20,6 +20,7 @@ library(shinyanimate)
 library(shinycssloaders)
 library(openxlsx)
 
+source("chat_cache.R")
 source("chatbot.R")
 
 # Muat environment variables dari .Renviron (API keys, dll.)

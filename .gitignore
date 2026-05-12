@@ -1,2 +1,7 @@
 .Renviron
+.RData
+.Rhistory
+
+# Folder cache percakapan SYLVA (berisi data lokal, tidak perlu di-commit)
+chat_cache/
 

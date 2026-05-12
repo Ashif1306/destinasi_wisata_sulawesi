@@ -5,7 +5,7 @@ account: kelompoklima
 server: shinyapps.io
 hostUrl: https://api.shinyapps.io/v1
 appId: 17289797
-bundleId:
+bundleId: 11970627
 url: https://wisatasulawesi.shinyapps.io/destinasi_wisata/
 version: 1
 asMultiple: FALSE

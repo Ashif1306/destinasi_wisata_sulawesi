@@ -75,6 +75,22 @@ sylva_chatbot_dependencies <- function() {
         line-height:1; transition: color 0.2s;
       }
       #sylva-close:hover { color: #ff6584; }
+      #sylva-clear-btn {
+        background: none; border: 1px solid rgba(255,100,100,0.3);
+        color: #94a3b8; font-size: 10px; cursor: pointer;
+        padding: 3px 8px; border-radius: 8px; margin-left: 6px;
+        transition: all 0.2s; white-space: nowrap;
+      }
+      #sylva-clear-btn:hover {
+        background: rgba(255,100,100,0.15);
+        border-color: #ff6584; color: #ff6584;
+      }
+      #sylva-cache-info {
+        font-size: 10px; color: #475569;
+        padding: 4px 14px 0;
+        text-align: right;
+      }
+      #sylva-cache-info span { color: #20C997; font-weight: 600; }
       #sylva-messages {
         flex: 1; overflow-y: auto; padding: 14px 14px 6px;
         display: flex; flex-direction: column; gap: 10px;
@@ -298,8 +314,16 @@ sylva_chatbot_ui <- function() {
           tags$p("Sulawesi Intelligent Landscape & Visitor Analyst")
         ),
         tags$div(class = "sylva-status"),
+        tags$button(
+          id = "sylva-clear-btn",
+          title = "Hapus riwayat percakapan",
+          onclick = "Shiny.setInputValue('sylva_clear_history', Date.now(), {priority: 'event'})",
+          "🗑️ Hapus"
+        ),
         tags$button(id = "sylva-close", onclick = "sylvaToggle()", "✕")
       ),
+      # Cache info bar
+      uiOutput("sylva_cache_info_ui"),
       # Messages area
       tags$div(
         id = "sylva-messages",
@@ -337,14 +361,30 @@ sylva_chatbot_server <- function(input, output, session, df_final, cluster_summa
   OPENAI_KEY <- Sys.getenv("OPENAI_API_KEY")
 
   # ---------------------------------------------------------------
+  # SESSION ID: Identitas unik per browser session
+  # Dipakai sebagai key untuk file cache percakapan
+  # ---------------------------------------------------------------
+  session_id <- session$token
+  if (is.null(session_id) || !nzchar(session_id)) {
+    # Fallback: hash waktu + random (jika token tidak tersedia)
+    session_id <- paste0(format(Sys.time(), "%Y%m%d%H%M%S"), "_", sample.int(99999, 1))
+  }
+
+  # ---------------------------------------------------------------
+  # LOAD CACHE (saat session baru dimulai)
+  # ---------------------------------------------------------------
+  initial_cache <- cache_load(session_id)
+
+  # ---------------------------------------------------------------
   # STATE: Memori Ganda (Dual Memory) — mencegah Context Bleed
+  # Diinisialisasi langsung dari cache jika tersedia
   # ---------------------------------------------------------------
   chat_state <- reactiveValues(
-    history       = list(),
+    history       = initial_cache$history       %||% list(),
     loading       = FALSE,
-    mem_kabupaten = "",   # kabupaten terakhir yang dibahas
-    mem_destinasi = "",   # destinasi spesifik terakhir yang dibahas
-    user_name     = ""    # nama user jika disebutkan di awal percakapan
+    mem_kabupaten = initial_cache$mem_kabupaten %||% "",
+    mem_destinasi = initial_cache$mem_destinasi %||% "",
+    user_name     = initial_cache$user_name     %||% ""
   )
 
   # ---------------------------------------------------------------
@@ -572,54 +612,52 @@ sylva_chatbot_server <- function(input, output, session, df_final, cluster_summa
       "2. Pertanyaan DAFTAR wisata di kabupaten X → HANYA sebut destinasi dari kolom Kab = X.\n",
       "3. Pertanyaan ALAMAT / LOKASI / CARA KE SANA → gunakan kolom ALAMAT dari katalog.\n",
       "4. Pertanyaan DESKRIPSI / INFO DETAIL → gunakan kolom DESC dari katalog.\n",
-      "5. Destinasi tidak ada di katalog → akui tidak ada, jangan mengarang.\n",
-      "6. Bahasa santai + emoji secukupnya. Bullet list jika banyak item.\n",
-      "7. Akhiri dengan pertanyaan balik agar obrolan mengalir.\n",
-      "8. Pertanyaan ML / Data Science → jawab dengan antusias dan detail, kaitkan dengan proyek ini jika bisa.\n",
-      "9. Obrolan santai / sapa → balas hangat dan ramah, tunjukkan kepribadianmu.\n",
-      "10. Topik sangat di luar keahlian (medis/hukum/politik): tolak sopan + humor ringan.\n"
+      "5. Destinasi tidak ada di katalog → akui tidak ada. DILARANG KERAS MENGARANG ATAU MENYEBUTKAN TEMPAT DI LUAR DATA AKTIF!\n",
+      "6. HANYA rekomendasikan destinasi yang TERCANTUM EKSPLISIT pada bagian DATA AKTIF/KATALOG di atas. Jika data kosong, bilang belum ada data untuk wilayah tersebut.\n",
+      "7. Bahasa santai + emoji secukupnya. Bullet list jika banyak item.\n",
+      "8. Akhiri dengan pertanyaan balik agar obrolan mengalir.\n",
+      "9. Pertanyaan ML / Data Science → jawab dengan antusias dan detail, kaitkan dengan proyek ini jika bisa.\n",
+      "10. Obrolan santai / sapa → balas hangat dan ramah, tunjukkan kepribadianmu.\n",
+      "11. Topik sangat di luar keahlian (medis/hukum/politik): tolak sopan + humor ringan.\n"
     )
     message("[SYLVA][data] prompt: ", nchar(sys), " chars (~", round(nchar(sys) / 4), " tokens)")
     sys
   }
 
-  # ---------------------------------------------------------------
-  # PROMPT BUILDER: Mode FOLLOWUP (ringan, hemat token)
-  # ---------------------------------------------------------------
-  build_followup_prompt <- function(mem_destinasi, mem_kabupaten, user_name = "") {
-    # Sapa user dengan namanya jika diketahui
-    sapa <- if (nzchar(user_name)) paste0("Nama user: ", user_name, ". ") else ""
+  # (Fungsi build_followup_prompt dihapus untuk mencegah halusinasi data.
+  # SYLVA kini akan selalu menggunakan build_data_prompt dengan konteks
+  # memori yang dimuat ulang, agar LLM tidak kehilangan pandangan terhadap
+  # data sesungguhnya yang ada di database.)
 
-    ctx_note <- if (nzchar(mem_destinasi)) {
-      paste0(sapa, "Konteks aktif: destinasi '", mem_destinasi, "'",
-             if (nzchar(mem_kabupaten)) paste0(" di '", mem_kabupaten, "'") else "",
-             ".\n")
-    } else if (nzchar(mem_kabupaten)) {
-      paste0(sapa, "Konteks aktif: Kabupaten/Kota '", mem_kabupaten, "'.\n")
-    } else {
-      paste0(sapa, "Tidak ada konteks spesifik.\n")
-    }
-
-    sys <- paste0(
-      "Kamu adalah SYLVA - asisten analitik pariwisata Sulawesi yang cerdas, hangat, dan asyik!\n",
-      "Kamu juga SANGAT paham Machine Learning, Data Science, dan Statistik.\n",
-      "Riwayat percakapan sudah mencakup semua data yang dibutuhkan.\n",
-      ctx_note,
-      "Aturan:\n",
-      "- Jika user menyebutkan namanya di riwayat (HANYA dari pesan user, bukan pesan bot), ingat dan gunakan namanya.\n",
-      "- JANGAN pernah mengekstrak nama dari pesan bot/asisten. Nama hanya valid jika user sendiri yang menyebutkan.\n",
-      "- Jawab secara natural dan ringkas berdasarkan riwayat chat.\n",
-      "- Jangan ulangi data yang sudah disebutkan kecuali diminta.\n",
-      "- JANGAN mengarang nama orang, nama tempat, atau fakta yang tidak ada di riwayat.\n",
-      "- Bahasa santai + emoji secukupnya.\n",
-      "- Akhiri dengan pertanyaan balik jika relevan.\n",
-      "- Pertanyaan ML / Data Science → jawab dengan antusias! Kamu ahli di bidang ini.\n",
-      "- Obrolan santai → balas hangat dan ramah, kamu punya kepribadian yang menyenangkan.\n",
-      "- Topik sangat di luar keahlian (medis/hukum/politik): tolak sopan + humor ringan.\n"
+  # ---------------------------------------------------------------
+  # RENDER CACHE INFO BAR
+  # ---------------------------------------------------------------
+  output$sylva_cache_info_ui <- renderUI({
+    n <- length(chat_state$history)
+    if (n == 0) return(NULL)
+    tags$div(
+      id = "sylva-cache-info",
+      HTML(paste0(
+        "\U0001F4BE Memori tersimpan: <span>", n, " pesan</span>",
+        if (nzchar(chat_state$user_name))
+          paste0(" &nbsp;|&nbsp; Halo, <span>", tools::toTitleCase(chat_state$user_name), "</span>!")
+        else ""
+      ))
     )
-    message("[SYLVA][followup] Lightweight prompt ~", round(nchar(sys) / 4), " tokens")
-    sys
-  }
+  })
+
+  # ---------------------------------------------------------------
+  # CLEAR HISTORY: Hapus riwayat percakapan
+  # ---------------------------------------------------------------
+  observeEvent(input$sylva_clear_history, {
+    cache_clear(session_id)
+    chat_state$history       <- list()
+    chat_state$mem_kabupaten <- ""
+    chat_state$mem_destinasi <- ""
+    chat_state$user_name     <- ""
+    session$sendCustomMessage("sylvaScroll", list())
+    message("[SYLVA] History cleared for session: ", session_id)
+  })
 
   # ---------------------------------------------------------------
   # RENDER BUBBLE CHAT
@@ -681,22 +719,22 @@ sylva_chatbot_server <- function(input, output, session, df_final, cluster_summa
       chat_state$mem_destinasi <- ""
       sys_prompt <- build_data_prompt(chat_state$history, df_final, entity)
 
-    } else if (entity$type == "list_followup") {
-      # TAHAP 3a: List request — bangun ulang entity dari memori
-      # User minta daftar, kita harus kirim data nyata bukan prompt ringan
+    } else {
+      # TAHAP 3: Followup & List Request
+      # Selalu gunakan build_data_prompt dengan data aktif dari memori
+      # agar chatbot tidak berhalusinasi saat membahas wilayah tertentu.
       if (nzchar(chat_state$mem_destinasi)) {
-        # Sedang bahas destinasi spesifik → cari row-nya & kirim detail + serupa
         dest_row_mem <- df_final[tolower(df_final$nama_wisata) == chat_state$mem_destinasi, ]
         if (nrow(dest_row_mem) > 0) {
           entity_mem <- list(type = "destinasi", dest_row = dest_row_mem[1, ],
-                             kab_filter = dest_row_mem[1, "kabupaten"])
+                             kab_filter = dest_row_mem[1, "kabupaten"],
+                             context_note = "User melanjutkan obrolan tentang destinasi ini.")
         } else {
           entity_mem <- list(type = "kabupaten", dest_row = NULL,
-                             kab_filter = chat_state$mem_kabupaten)
+                             kab_filter = chat_state$mem_kabupaten,
+                             context_note = "User melanjutkan obrolan.")
         }
       } else if (nzchar(chat_state$mem_kabupaten)) {
-        # Sedang bahas kabupaten → kirim daftar HANYA kabupaten tersebut
-        # Sertakan context_note agar LLM tahu mengapa ia menerima data kabupaten ini
         ctx_note_mem <- paste0("User meminta informasi/rekomendasi wisata di ",
                                chat_state$mem_kabupaten, ".")
         entity_mem <- list(type = "kabupaten", dest_row = NULL,
@@ -707,19 +745,6 @@ sylva_chatbot_server <- function(input, output, session, df_final, cluster_summa
                            context_note = NULL)
       }
       sys_prompt <- build_data_prompt(chat_state$history, df_final, entity_mem)
-
-    } else {
-      # TAHAP 3b: Chitchat murni → prompt ringan jika ada memori, data umum jika tidak
-      has_memory <- nzchar(chat_state$mem_destinasi) || nzchar(chat_state$mem_kabupaten)
-      if (has_memory && length(chat_state$history) >= 4) {
-        sys_prompt <- build_followup_prompt(chat_state$mem_destinasi,
-                                            chat_state$mem_kabupaten,
-                                            chat_state$user_name)
-      } else {
-        entity_general <- list(type = "followup", dest_row = NULL, kab_filter = NULL,
-                               context_note = NULL)
-        sys_prompt <- build_data_prompt(chat_state$history, df_final, entity_general)
-      }
     }
 
     # 4b. Ekstrak nama user dari pesan awal jika belum tersimpan
@@ -808,6 +833,15 @@ sylva_chatbot_server <- function(input, output, session, df_final, cluster_summa
     chat_state$history <- c(chat_state$history, list(list(role = "assistant", content = bot_reply)))
     session$sendCustomMessage("sylvaRenderMd", list())
     session$sendCustomMessage("sylvaScroll",   list())
+
+    # AUTO-SAVE ke cache setelah setiap respons bot
+    cache_save(
+      session_id    = session_id,
+      history       = chat_state$history,
+      mem_kabupaten = chat_state$mem_kabupaten,
+      mem_destinasi = chat_state$mem_destinasi,
+      user_name     = chat_state$user_name
+    )
   })
 }
 
